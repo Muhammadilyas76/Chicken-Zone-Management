@@ -386,9 +386,9 @@ class _HomePageState extends State<HomePage> {
           physics: const NeverScrollableScrollPhysics(),
           childAspectRatio: 1.55,
           children: [
-            statCard('Total Mall', kg(mallRecords.fold(0.0, (s, r) => s + n(r['weight']))), green, Icons.scale),
+            statCard('Total Mall', kg(mallRecords.fold(0.0, (s, r) => s + n(r['weight'])), green, Icons.scale),
             statCard('Total Mall Amount', money(totalMall), orange, Icons.inventory_2),
-            statCard('Mall Mein Kami', kg(kamiRecords.fold(0.0, (s, r) => s + n(r['weight']))), blue, Icons.remove_circle),
+            statCard('Mall Mein Kami', kg(kamiRecords.fold(0.0, (s, r) => s + n(r['weight'])), blue, Icons.remove_circle),
             statCard('Kami Amount', money(totalKami), red, Icons.local_shipping),
             statCard('Customer Received', money(totalReceived), green, Icons.payments),
             statCard('Customer Baqaya', money(totalBalance), red, Icons.account_balance_wallet),
