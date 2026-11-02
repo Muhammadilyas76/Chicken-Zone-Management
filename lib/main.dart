@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pdf/pdf.dart';
@@ -8,533 +8,155 @@ import 'package:printing/printing.dart';
 
 void main() => runApp(const ChickenZoneApp());
 
-const Color green = Color(0xFF087A42);
-const Color red = Color(0xFFD71920);
-const Color blue = Color(0xFF1457B8);
-const Color orange = Color(0xFFEF8500);
+const green = Color(0xFF087A42);
+const red = Color(0xFFD71920);
+const String validLicenseKey = 'TU-CHICKEN-FULL-2026';
 
 class ChickenZoneApp extends StatelessWidget {
   const ChickenZoneApp({super.key});
-
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Chicken Zone',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: green),
-        scaffoldBackgroundColor: const Color(0xFFF4F7F8),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: green,
-          foregroundColor: Colors.white,
-          centerTitle: true,
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      ),
-      home: const HomePage(),
-    );
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'TU Chicken Zone',
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: green),
+      scaffoldBackgroundColor: const Color(0xFFF4F7F8),
+      appBarTheme: const AppBarTheme(backgroundColor: green, foregroundColor: Colors.white, centerTitle: true)),
+    home: const LicenseGate(),
+  );
+}
+
+class LicenseGate extends StatefulWidget {
+  const LicenseGate({super.key});
+  @override
+  State<LicenseGate> createState() => _LicenseGateState();
+}
+class _LicenseGateState extends State<LicenseGate> {
+  bool ready=false, activated=false, expired=false;
+  int remaining=86400;
+  Timer? timer;
+  @override
+  void initState(){super.initState(); _load();}
+  Future<void> _load() async {
+    final p=await SharedPreferences.getInstance();
+    activated=p.getBool('cz_activated')??false;
+    int? start=p.getInt('cz_demo_start');
+    if(start==null){start=DateTime.now().millisecondsSinceEpoch; await p.setInt('cz_demo_start',start);}
+    remaining=(86400-((DateTime.now().millisecondsSinceEpoch-start)~/1000)).clamp(0,86400).toInt();
+    expired=remaining<=0;
+    if(!activated && !expired) timer=Timer.periodic(const Duration(seconds:1),(_){
+      if(!mounted)return; setState(()=>remaining=(remaining-1).clamp(0,86400).toInt());
+      if(remaining<=0){timer?.cancel();setState(()=>expired=true);}
+    });
+    if(mounted)setState(()=>ready=true);
+  }
+  @override
+  void dispose(){timer?.cancel();super.dispose();}
+  Future<void> activate() async {
+    final c=TextEditingController();
+    final ok=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('Activate License / لائسنس'),
+      content:TextField(controller:c,decoration:const InputDecoration(labelText:'License Key')),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('Cancel')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx,c.text.trim().toUpperCase()==validLicenseKey),child:const Text('Activate'))]));
+    if(ok==true){final p=await SharedPreferences.getInstance();await p.setBool('cz_activated',true);if(mounted)setState(()=>activated=true);}
+    else if(ok==false && c.text.trim().isNotEmpty && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:Text('Invalid License Key')));
+  }
+  @override
+  Widget build(BuildContext context){
+    if(!ready)return const Scaffold(body:Center(child:CircularProgressIndicator()));
+    if(activated)return const HomePage();
+    if(!expired)return HomePage(demoSeconds:remaining,onActivate:activate);
+    return Scaffold(body:Center(child:Padding(padding:const EdgeInsets.all(24),child:Column(mainAxisSize:MainAxisSize.min,children:[
+      Image.asset('assets/chicken_zone_logo.png',height:150),const SizedBox(height:16),
+      const Text('Demo expired / ڈیمو ختم ہوگیا',style:TextStyle(fontSize:22,fontWeight:FontWeight.bold)),
+      const SizedBox(height:12),FilledButton(onPressed:activate,child:const Text('Enter License Key'))]))));
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
-
-  @override
-  State<HomePage> createState() => _HomePageState();
+  final int? demoSeconds; final VoidCallback? onActivate;
+  const HomePage({super.key,this.demoSeconds,this.onActivate});
+  @override State<HomePage> createState()=>_HomePageState();
 }
-
-class _HomePageState extends State<HomePage> {
-  int page = 0;
-  bool loading = true;
-  List<Map<String, dynamic>> customers = [];
-  List<Map<String, dynamic>> mallRecords = [];
-  List<Map<String, dynamic>> kamiRecords = [];
-
-  @override
-  void initState() {
-    super.initState();
-    loadData();
+class _HomePageState extends State<HomePage>{
+  int page=0; bool loading=true;
+  List<Map<String,dynamic>> customers=[],mall=[],kami=[];
+  @override void initState(){super.initState();load();}
+  Future<void> load()async{final p=await SharedPreferences.getInstance();
+    customers=dec(p.getString('cz_customers'));mall=dec(p.getString('cz_mall'));kami=dec(p.getString('cz_kami'));
+    if(mounted)setState(()=>loading=false);}
+  List<Map<String,dynamic>> dec(String? s){try{return (jsonDecode(s??'[]') as List).map((e)=>Map<String,dynamic>.from(e)).toList();}catch(_){return [];}}
+  double n(dynamic v)=>v is num?v.toDouble():double.tryParse('$v')??0;
+  double weight(Map<String,dynamic> m)=>n(m['kg'])+n(m['grams'])/1000;
+  String money(dynamic v)=>'Rs. ${n(v).toStringAsFixed(0)}';
+  String wt(Map<String,dynamic> m)=>'${n(m['kg']).toStringAsFixed(0)} Kg ${n(m['grams']).toStringAsFixed(0)} g';
+  double total(Map<String,dynamic> c)=>n(c['oldBalance'])+n(c['newMall']);
+  double balance(Map<String,dynamic> c)=>total(c)-n(c['received']);
+  double get receivedTotal=>customers.fold(0.0,(s,c)=>s+n(c['received']));
+  double get balanceTotal=>customers.fold(0.0,(s,c)=>s+balance(c));
+  double get mallAmount=>mall.fold(0.0,(s,r)=>s+n(r['total']));
+  double get kamiAmount=>kami.fold(0.0,(s,r)=>s+n(r['total']));
+  Future<void> save()async{final p=await SharedPreferences.getInstance();await p.setString('cz_customers',jsonEncode(customers));await p.setString('cz_mall',jsonEncode(mall));await p.setString('cz_kami',jsonEncode(kami));if(mounted)setState((){});}
+  TextEditingController ctl(dynamic v)=>TextEditingController(text:'${v??''}');
+  Widget field(TextEditingController c,String label,{bool numeric=false})=>TextField(controller:c,keyboardType:numeric?const TextInputType.numberWithOptions(decimal:true):TextInputType.text,decoration:InputDecoration(labelText:label));
+  Future<void> addRecord(bool isKami)async{
+    final kgc=ctl(''),gc=ctl('0'),rate=ctl(''),expense=ctl('');
+    final result=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(title:Text(isKami?'Mall Mein Kami':'Total Mall'),
+      content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+        field(kgc,'Weight Kg',numeric:true),field(gc,'Weight Gram (0-999)',numeric:true),field(rate,'Sale Rate Rs/Kg',numeric:true),field(expense,isKami?'Vehicle Expense':'Mall Expense',numeric:true),
+        const SizedBox(height:8),const Text('Amount = total weight × rate + expense') ])),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel')),FilledButton(onPressed:(){
+        final w=n(kgc.text)+n(gc.text)/1000,r=n(rate.text),e=n(expense.text);
+        if(w<=0||r<=0)return;Navigator.pop(ctx,{'kg':n(kgc.text),'grams':n(gc.text),'rate':r,'expense':e,'total':w*r+e,'date':DateTime.now().toIso8601String().substring(0,10)});
+      },child:const Text('Save'))]));
+    if(result!=null){setState(()=>(isKami?kami:mall).insert(0,result));await save();}
   }
-
-  Future<void> loadData() async {
-    final prefs = await SharedPreferences.getInstance();
-    customers = _decodeList(prefs.getString('cz_customers'));
-    mallRecords = _decodeList(prefs.getString('cz_mall'));
-    kamiRecords = _decodeList(prefs.getString('cz_kami'));
-    if (mounted) setState(() => loading = false);
+  Future<void> customerForm({Map<String,dynamic>? oldC,int? index})async{
+    final name=ctl(oldC?['name']??''),place=ctl(oldC?['place']??''),phone=ctl(oldC?['phone']??'');
+    final old=ctl(oldC?['oldBalance']??0),kgc=ctl(oldC?['kg']??0),gc=ctl(oldC?['grams']??0),rate=ctl(oldC?['rate']??0),received=ctl(oldC?['received']??0);
+    final data=await showDialog<Map<String,dynamic>>(context:context,builder:(ctx)=>AlertDialog(title:Text(oldC==null?'Add Customer':'Edit Customer'),
+      content:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[
+        field(name,'Customer Name *'),field(place,'Area / Location'),field(phone,'Phone Number'),field(old,'Old Balance Rs',numeric:true),
+        field(kgc,'New Mall Weight Kg',numeric:true),field(gc,'New Mall Weight Gram',numeric:true),field(rate,'Rate Rs/Kg',numeric:true),field(received,'Received Rs',numeric:true),
+        const SizedBox(height:8),const Text('New Mall amount = (Kg + Gram/1000) × rate') ])),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel')),FilledButton(onPressed:(){
+        if(name.text.trim().isEmpty)return;
+        final amount=(n(kgc.text)+n(gc.text)/1000)*n(rate.text);
+        Navigator.pop(ctx,{'name':name.text.trim(),'place':place.text.trim(),'phone':phone.text.trim(),'oldBalance':n(old.text),'kg':n(kgc.text),'grams':n(gc.text),'rate':n(rate.text),'newMall':amount,'received':n(received.text),'updated':DateTime.now().toIso8601String().substring(0,10)});
+      },child:const Text('Save Customer'))]));
+    if(data!=null){setState((){if(index==null)customers.insert(0,data);else customers[index]=data;});await save();}
   }
-
-  List<Map<String, dynamic>> _decodeList(String? value) {
-    if (value == null) return [];
-    try {
-      return (jsonDecode(value) as List)
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-    } catch (_) {
-      return [];
-    }
-  }
-
-  Future<void> saveData() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('cz_customers', jsonEncode(customers));
-    await prefs.setString('cz_mall', jsonEncode(mallRecords));
-    await prefs.setString('cz_kami', jsonEncode(kamiRecords));
-    if (mounted) setState(() {});
-  }
-
-  double n(dynamic value) => (value is num) ? value.toDouble() : double.tryParse('$value') ?? 0;
-  String money(dynamic value) => 'Rs. ${n(value).toStringAsFixed(0)}';
-  String kg(dynamic value) => '${n(value).toStringAsFixed(1)} Kg';
-
-  double get totalMall => mallRecords.fold(0, (s, r) => s + n(r['total']));
-  double get totalKami => kamiRecords.fold(0, (s, r) => s + n(r['total']));
-  double get totalReceived => customers.fold(0, (s, c) => s + n(c['received']));
-  double get totalBalance => customers.fold(0, (s, c) => s + customerBalance(c));
-
-  double customerTotal(Map<String, dynamic> c) => n(c['oldBalance']) + n(c['newMall']);
-  double customerBalance(Map<String, dynamic> c) => customerTotal(c) - n(c['received']);
-
-  Future<void> addMallRecord({required bool kami}) async {
-    final formKey = GlobalKey<FormState>();
-    final weight = TextEditingController();
-    final rate = TextEditingController();
-    final expense = TextEditingController();
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(kami ? 'Mall Mein Kami (مال میں کمی)' : 'Total Mall (کل مال)'),
-        content: Form(
-          key: formKey,
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              _field(weight, kami ? 'کمی وزن (Kg)' : 'کل وزن (Kg)', number: true),
-              const SizedBox(height: 10),
-              _field(rate, 'فروخت قیمت (Rs/Kg)', number: true),
-              const SizedBox(height: 10),
-              _field(expense, kami ? 'گاڑی خرچ (Rs)' : 'مال خرچ (Rs)', number: true),
-              const SizedBox(height: 12),
-              const Text('کل = وزن × فروخت قیمت + خرچ', style: TextStyle(color: green, fontWeight: FontWeight.bold)),
-            ]),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () async {
-              if (!formKey.currentState!.validate()) return;
-              final w = n(weight.text), r = n(rate.text), e = n(expense.text);
-              final record = {
-                'date': DateTime.now().toIso8601String().substring(0, 10),
-                'weight': w,
-                'rate': r,
-                'expense': e,
-                'total': w * r + e,
-              };
-              setState(() => (kami ? kamiRecords : mallRecords).insert(0, record));
-              await saveData();
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Save Record'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> customerForm({Map<String, dynamic>? existing, int? index}) async {
-    final formKey = GlobalKey<FormState>();
-    final name = TextEditingController(text: existing?['name'] ?? '');
-    final place = TextEditingController(text: existing?['place'] ?? '');
-    final phone = TextEditingController(text: existing?['phone'] ?? '');
-    final old = TextEditingController(text: '${existing?['oldBalance'] ?? 0}');
-    final newMall = TextEditingController(text: '${existing?['newMall'] ?? 0}');
-    final received = TextEditingController(text: '${existing?['received'] ?? 0}');
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(existing == null ? 'Add Customer / نیا کسٹمر' : 'Edit Customer / کسٹمر تبدیل کریں'),
-        content: Form(
-          key: formKey,
-          child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              _field(name, 'Customer Name / نام', required: true),
-              const SizedBox(height: 8),
-              _field(place, 'Place / Area / جگہ'),
-              const SizedBox(height: 8),
-              _field(phone, 'Phone Number / فون'),
-              const SizedBox(height: 8),
-              _field(old, 'Purana Baqaya / پرانا بقایا', number: true),
-              const SizedBox(height: 8),
-              _field(newMall, 'New Mall / نیا مال', number: true),
-              const SizedBox(height: 8),
-              _field(received, 'Wasool / وصولی', number: true),
-              const SizedBox(height: 8),
-              Text(
-                'Total: ${money(n(old.text) + n(newMall.text))}   |   Baqi: ${money(n(old.text) + n(newMall.text) - n(received.text))}',
-                style: const TextStyle(fontWeight: FontWeight.bold, color: green),
-              ),
-            ]),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () async {
-              if (!formKey.currentState!.validate()) return;
-              final item = {
-                'name': name.text.trim(),
-                'place': place.text.trim(),
-                'phone': phone.text.trim(),
-                'oldBalance': n(old.text),
-                'newMall': n(newMall.text),
-                'received': n(received.text),
-                'updated': DateTime.now().toIso8601String().substring(0, 10),
-              };
-              setState(() {
-                if (index != null && index >= 0 && index < customers.length) {
-                  customers[index] = item;
-                } else {
-                  customers.insert(0, item);
-                }
-              });
-              await saveData();
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: Text(existing == null ? 'Save Customer' : 'Update'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> collectPayment(int index) async {
-    final controller = TextEditingController();
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Wasooli - ${customers[index]['name']}'),
-        content: _field(controller, 'Payment Amount (Rs)', number: true),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () async {
-              final amount = n(controller.text);
-              if (amount <= 0) return;
-              setState(() => customers[index]['received'] = n(customers[index]['received']) + amount);
-              await saveData();
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Add Payment'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> deleteCustomer(int index) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete customer?'),
-        content: Text('Remove ${customers[index]['name']}?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      setState(() => customers.removeAt(index));
-      await saveData();
-    }
-  }
-
-  Future<void> customerPdf(Map<String, dynamic> c) async {
-    final doc = pw.Document();
-    final total = customerTotal(c);
-    final received = n(c['received']);
-    final balance = customerBalance(c);
-    doc.addPage(pw.Page(
-      pageFormat: PdfPageFormat.a4,
-      build: (context) => pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Center(child: pw.Text('CHICKEN ZONE', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold, color: PdfColors.green800))),
-          pw.Center(child: pw.Text('Customer Ledger / کسٹمر حساب')),
-          pw.SizedBox(height: 22),
-          pw.Table.fromTextArray(
-            headers: ['Detail', 'Value'],
-            data: [
-              ['Customer Name', '${c['name'] ?? ''}'],
-              ['Place / Area', '${c['place'] ?? ''}'],
-              ['Phone', '${c['phone'] ?? ''}'],
-              ['Old Balance', money(c['oldBalance'])],
-              ['New Mall', money(c['newMall'])],
-              ['Total', money(total)],
-              ['Received', money(received)],
-              ['Remaining Balance', money(balance)],
-              ['Report Date', DateTime.now().toIso8601String().substring(0, 10)],
-            ],
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-            headerDecoration: const pw.BoxDecoration(color: PdfColors.green800),
-            cellPadding: const pw.EdgeInsets.all(8),
-          ),
-          pw.SizedBox(height: 25),
-          pw.Text('Prepared by Chicken Zone Management System'),
-        ],
-      ),
-    ));
-    await Printing.layoutPdf(onLayout: (_) async => doc.save(), name: 'customer_${(c['name'] ?? 'ledger').toString().replaceAll(' ', '_')}.pdf');
-  }
-
-  Future<void> allCustomersPdf() async {
-    final doc = pw.Document();
-    doc.addPage(pw.MultiPage(
-      pageFormat: PdfPageFormat.a4.landscape,
-      build: (context) => [
-        pw.Center(child: pw.Text('CHICKEN ZONE - CUSTOMER LEDGER', style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold))),
-        pw.SizedBox(height: 12),
-        pw.Table.fromTextArray(
-          headers: ['#', 'Name', 'Place', 'Old Balance', 'New Mall', 'Total', 'Received', 'Balance'],
-          data: customers.asMap().entries.map((e) {
-            final c = e.value;
-            return [
-              '${e.key + 1}', '${c['name'] ?? ''}', '${c['place'] ?? ''}',
-              money(c['oldBalance']), money(c['newMall']), money(customerTotal(c)),
-              money(c['received']), money(customerBalance(c)),
-            ];
-          }).toList(),
-          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-          headerDecoration: const pw.BoxDecoration(color: PdfColors.green800),
-          cellPadding: const pw.EdgeInsets.all(5),
-        ),
-        pw.SizedBox(height: 12),
-        pw.Text('Total Remaining: ${money(totalBalance)}'),
-      ],
-    ));
-    await Printing.layoutPdf(onLayout: (_) async => doc.save(), name: 'chicken_zone_customers.pdf');
-  }
-
-  Future<void> clearRecords(bool kami) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Clear records?'),
-        content: const Text('This removes all records in this section.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      setState(() => (kami ? kamiRecords : mallRecords).clear());
-      await saveData();
-    }
-  }
-
-  Widget _field(TextEditingController controller, String label, {bool number = false, bool required = false}) {
-    return TextFormField(
-      controller: controller,
-      keyboardType: number ? const TextInputType.numberWithOptions(decimal: true) : TextInputType.text,
-      validator: required ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null : null,
-      decoration: InputDecoration(labelText: label, prefixIcon: const Icon(Icons.edit_note)),
-    );
-  }
-
-  Widget statCard(String title, String value, Color color, IconData icon) {
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Icon(icon, color: color, size: 26),
-          const SizedBox(height: 8),
-          Text(title, style: const TextStyle(fontSize: 12)),
-          const SizedBox(height: 4),
-          Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 16)),
-        ]),
-      ),
-    );
-  }
-
-  Widget dashboard() {
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            gradient: const LinearGradient(colors: [green, Color(0xFF004D2A)]),
-          ),
-          child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('🐔 CHICKEN ZONE', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-            Text('Management System • Poultry Business Solution', style: TextStyle(color: Colors.white70)),
-          ]),
-        ),
-        const SizedBox(height: 8),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          childAspectRatio: 1.55,
-          children: [
-            statCard('Total Mall', kg(mallRecords.fold(0.0, (s, r) => s + n(r['weight'])), green, Icons.scale),
-            statCard('Total Mall Amount', money(totalMall), orange, Icons.inventory_2),
-            statCard('Mall Mein Kami', kg(kamiRecords.fold(0.0, (s, r) => s + n(r['weight'])), blue, Icons.remove_circle),
-            statCard('Kami Amount', money(totalKami), red, Icons.local_shipping),
-            statCard('Customer Received', money(totalReceived), green, Icons.payments),
-            statCard('Customer Baqaya', money(totalBalance), red, Icons.account_balance_wallet),
-          ],
-        ),
-        const SizedBox(height: 8),
-        const Text('Quick Actions / فوری کام', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-        const SizedBox(height: 8),
-        Wrap(spacing: 8, runSpacing: 8, children: [
-          _action('Total Mall', green, Icons.scale, () => addMallRecord(kami: false)),
-          _action('Mall Mein Kami', blue, Icons.local_shipping, () => addMallRecord(kami: true)),
-          _action('Add Customer', red, Icons.person_add, () => customerForm()),
-          _action('Customer PDF', orange, Icons.picture_as_pdf, allCustomersPdf),
-        ]),
-      ],
-    );
-  }
-
-  Widget _action(String title, Color color, IconData icon, VoidCallback onTap) {
-    return SizedBox(
-      width: 150,
-      child: FilledButton.icon(
-        style: FilledButton.styleFrom(backgroundColor: color, padding: const EdgeInsets.symmetric(vertical: 14)),
-        onPressed: onTap,
-        icon: Icon(icon, size: 18),
-        label: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-      ),
-    );
-  }
-
-  Widget recordsPage(bool kami) {
-    final records = kami ? kamiRecords : mallRecords;
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(children: [
-              Text(kami ? 'Mall Mein Kami (مال میں کمی)' : 'Total Mall (کل مال)', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 5),
-              Text(kami ? 'Total = Kami Weight × Sale Price + Gari Kharch' : 'Total = Weight × Sale Price + Mall Kharch', textAlign: TextAlign.center),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: () => addMallRecord(kami: kami),
-                icon: const Icon(Icons.add),
-                label: const Text('Add New Record'),
-              ),
-            ]),
-          ),
-        ),
-        ...records.asMap().entries.map((entry) {
-          final i = entry.key;
-          final r = entry.value;
-          return Card(
-            child: ListTile(
-              leading: CircleAvatar(backgroundColor: kami ? blue : green, child: Text('${i + 1}', style: const TextStyle(color: Colors.white))),
-              title: Text('${r['date']}  •  ${kg(r['weight'])}'),
-              subtitle: Text('Rate: ${money(r['rate'])}/Kg   |   Expense: ${money(r['expense'])}'),
-              trailing: Text(money(r['total']), style: const TextStyle(fontWeight: FontWeight.bold, color: green)),
-            ),
-          );
-        }),
-        if (records.isNotEmpty)
-          TextButton.icon(onPressed: () => clearRecords(kami), icon: const Icon(Icons.delete_outline), label: const Text('Clear section records')),
-      ],
-    );
-  }
-
-  Widget customersPage() {
-    return Column(children: [
-      Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(children: [
-          Expanded(child: Text('Customers (${customers.length})', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
-          IconButton.filled(onPressed: () => customerForm(), icon: const Icon(Icons.person_add), tooltip: 'Add Customer'),
-          IconButton.filledTonal(onPressed: allCustomersPdf, icon: const Icon(Icons.picture_as_pdf), tooltip: 'All Customer PDF'),
-        ]),
-      ),
-      Expanded(
-        child: customers.isEmpty
-            ? const Center(child: Text('No customers yet. Add your first customer.'))
-            : ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                itemCount: customers.length,
-                itemBuilder: (context, index) {
-                  final c = customers[index];
-                  return Card(
-                    child: ExpansionTile(
-                      leading: CircleAvatar(backgroundColor: green, child: Text('${index + 1}', style: const TextStyle(color: Colors.white))),
-                      title: Text('${c['name']}', style: const TextStyle(fontWeight: FontWeight.bold)),
-                      subtitle: Text('${c['place'] ?? ''} • Balance: ${money(customerBalance(c))}', style: TextStyle(color: customerBalance(c) > 0 ? red : green)),
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text('Phone: ${c['phone'] ?? '-'}'),
-                            Text('Old Balance: ${money(c['oldBalance'])}'),
-                            Text('New Mall: ${money(c['newMall'])}'),
-                            Text('Total: ${money(customerTotal(c))}'),
-                            Text('Received: ${money(c['received'])}'),
-                            Text('Remaining: ${money(customerBalance(c))}', style: const TextStyle(fontWeight: FontWeight.bold, color: red)),
-                            const SizedBox(height: 8),
-                            Wrap(spacing: 6, children: [
-                              FilledButton.tonalIcon(onPressed: () => customerForm(existing: c, index: index), icon: const Icon(Icons.edit), label: const Text('Edit')),
-                              FilledButton.icon(onPressed: () => collectPayment(index), icon: const Icon(Icons.payments), label: const Text('Wasooli')),
-                              FilledButton.tonalIcon(onPressed: () => customerPdf(c), icon: const Icon(Icons.picture_as_pdf), label: const Text('PDF')),
-                              IconButton(onPressed: () => deleteCustomer(index), icon: const Icon(Icons.delete, color: red)),
-                            ]),
-                          ]),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-      ),
-    ]);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    final pages = [dashboard(), recordsPage(false), recordsPage(true), customersPage()];
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Chicken Zone Management'),
-        actions: [
-          IconButton(
-            tooltip: 'Customer PDF',
-            onPressed: allCustomersPdf,
-            icon: const Icon(Icons.picture_as_pdf),
-          ),
-        ],
-      ),
-      body: SafeArea(child: pages[page]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: page,
-        onDestinationSelected: (i) => setState(() => page = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home), label: 'Home'),
-          NavigationDestination(icon: Icon(Icons.scale), label: 'Total Mall'),
-          NavigationDestination(icon: Icon(Icons.local_shipping), label: 'Kami'),
-          NavigationDestination(icon: Icon(Icons.people), label: 'Customers'),
-        ],
-      ),
-    );
+  Future<void> payment(int i)async{final c=ctl('');final v=await showDialog<double>(context:context,builder:(ctx)=>AlertDialog(title:Text('Payment - ${customers[i]['name']}'),content:field(c,'Amount Rs',numeric:true),actions:[TextButton(onPressed:()=>Navigator.pop(ctx),child:const Text('Cancel')),FilledButton(onPressed:()=>Navigator.pop(ctx,n(c.text)),child:const Text('Add'))]));
+    if(v!=null&&v>0){customers[i]['received']=n(customers[i]['received'])+v;await save();}}
+  Future<void> pdfCustomer(Map<String,dynamic> c)async{final d=pw.Document();d.addPage(pw.Page(build:(_)=>pw.Column(crossAxisAlignment:pw.CrossAxisAlignment.start,children:[
+    pw.Center(child:pw.Text('TU CHICKEN ZONE - CUSTOMER LEDGER',style:pw.TextStyle(fontSize:20,fontWeight:pw.FontWeight.bold))),
+    pw.SizedBox(height:20),pw.Table.fromTextArray(headers:['Detail','Value'],data:[
+      ['Name','${c['name']}'],['Place','${c['place']}'],['Phone','${c['phone']}'],['Weight',wt(c)],['Rate',money(c['rate'])],
+      ['Old Balance',money(c['oldBalance'])],['New Mall',money(c['newMall'])],['Total',money(total(c))],['Received',money(c['received'])],['Remaining',money(balance(c))]])])));
+    await Printing.layoutPdf(onLayout:(_)=>d.save());}
+  Future<void> pdfAll()async{final d=pw.Document();d.addPage(pw.MultiPage(pageFormat:PdfPageFormat.a4.landscape,build:(_)=>[
+    pw.Text('TU CHICKEN ZONE - CUSTOMER LIST',style:pw.TextStyle(fontSize:18,fontWeight:pw.FontWeight.bold)),
+    pw.Table.fromTextArray(headers:['#','Name','Area','Weight','Rate','Old','New Mall','Total','Received','Balance'],
+    data:customers.asMap().entries.map((e){final c=e.value;return ['${e.key+1}','${c['name']}','${c['place']}',wt(c),money(c['rate']),money(c['oldBalance']),money(c['newMall']),money(total(c)),money(c['received']),money(balance(c))];}).toList())]));
+    await Printing.layoutPdf(onLayout:(_)=>d.save());}
+  Widget stat(String title,String value,Color color)=>Card(child:Padding(padding:const EdgeInsets.all(12),child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[Text(title),const SizedBox(height:6),Text(value,style:TextStyle(fontWeight:FontWeight.bold,color:color,fontSize:16))])));
+  Widget dashboard()=>ListView(padding:const EdgeInsets.all(12),children:[
+    Card(color:green,child:Padding(padding:const EdgeInsets.all(16),child:Row(children:[Image.asset('assets/chicken_zone_logo.png',width:70,height:70),const SizedBox(width:12),const Expanded(child:Text('TU CHICKEN ZONE\nManagement System',style:TextStyle(color:Colors.white,fontSize:20,fontWeight:FontWeight.bold)))]))),
+    if(widget.demoSeconds!=null)Card(child:ListTile(title:const Text('Demo Version (24 Hours)'),subtitle:Text('Remaining: ${widget.demoSeconds!~/3600}h ${(widget.demoSeconds!%3600)~/60}m ${widget.demoSeconds!%60}s'),trailing:TextButton(onPressed:widget.onActivate,child:const Text('License')))),
+    GridView.count(shrinkWrap:true,physics:const NeverScrollableScrollPhysics(),crossAxisCount:2,childAspectRatio:1.7,children:[
+      stat('Total Mall Amount',money(mallAmount),green),stat('Kami Amount',money(kamiAmount),red),stat('Customer Received',money(receivedTotal),green),stat('Customer Balance',money(balanceTotal),red)]),
+    Wrap(spacing:8,children:[FilledButton(onPressed:()=>addRecord(false),child:const Text('Add Mall')),FilledButton(onPressed:()=>addRecord(true),child:const Text('Add Kami')),FilledButton(onPressed:()=>customerForm(),child:const Text('Add Customer')),OutlinedButton(onPressed:pdfAll,child:const Text('All Customers PDF'))])]);
+  Widget records(bool isKami){final list=isKami?kami:mall;return ListView(padding:const EdgeInsets.all(12),children:[
+    FilledButton.icon(onPressed:()=>addRecord(isKami),icon:const Icon(Icons.add),label:Text(isKami?'Add Kami Record':'Add Mall Record')),
+    ...list.asMap().entries.map((e)=>Card(child:ListTile(title:Text('${e.value['date']} • ${wt(e.value)}'),subtitle:Text('Rate ${money(e.value['rate'])}/Kg • Expense ${money(e.value['expense'])}'),trailing:Text(money(e.value['total']))))) ]);}
+  Widget customerPage()=>Column(children:[Padding(padding:const EdgeInsets.all(10),child:Row(children:[Expanded(child:Text('Customers (${customers.length})',style:const TextStyle(fontSize:19,fontWeight:FontWeight.bold))),IconButton(onPressed:pdfAll,icon:const Icon(Icons.picture_as_pdf)),IconButton(onPressed:()=>customerForm(),icon:const Icon(Icons.person_add))])),
+    Expanded(child:ListView.builder(itemCount:customers.length,itemBuilder:(ctx,i){final c=customers[i];return Card(child:ExpansionTile(leading:CircleAvatar(child:Text('${i+1}')),title:Text('${c['name']}'),subtitle:Text('Balance ${money(balance(c))}'),children:[
+      ListTile(title:Text('Weight ${wt(c)} • Rate ${money(c['rate'])}/Kg'),subtitle:Text('New Mall ${money(c['newMall'])} | Old ${money(c['oldBalance'])} | Received ${money(c['received'])}')),
+      Wrap(children:[TextButton(onPressed:()=>customerForm(oldC:c,index:i),child:const Text('Edit')),TextButton(onPressed:()=>payment(i),child:const Text('Payment')),TextButton(onPressed:()=>pdfCustomer(c),child:const Text('PDF')),TextButton(onPressed:()async{customers.removeAt(i);await save();},child:const Text('Delete'))]) ]));}))]);
+  @override Widget build(BuildContext context){if(loading)return const Scaffold(body:Center(child:CircularProgressIndicator()));
+    final views=[dashboard(),records(false),records(true),customerPage()];
+    return Scaffold(appBar:AppBar(title:const Text('TU Chicken Zone'),actions:[IconButton(onPressed:pdfAll,icon:const Icon(Icons.picture_as_pdf))]),body:SafeArea(child:views[page]),
+      bottomNavigationBar:NavigationBar(selectedIndex:page,onDestinationSelected:(i)=>setState(()=>page=i),destinations:const[
+        NavigationDestination(icon:Icon(Icons.home),label:'Home'),NavigationDestination(icon:Icon(Icons.scale),label:'Mall'),NavigationDestination(icon:Icon(Icons.local_shipping),label:'Kami'),NavigationDestination(icon:Icon(Icons.people),label:'Customers')]));
   }
 }
